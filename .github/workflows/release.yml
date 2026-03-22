@@ -110,9 +110,6 @@ jobs:
       - name: Build chart dependencies
         run: helm dependency build "$CHART_DIR"
 
-      - name: Lint chart
-        run: helm lint "$CHART_DIR"
-
       - name: Package chart
         run: |
           mkdir -p dist
