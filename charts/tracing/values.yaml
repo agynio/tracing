@@ -75,7 +75,7 @@ env:
   - name: DATABASE_URL
     value: ""
   - name: NOTIFICATIONS_ADDRESS
-    value: ""
+    value: "notifications:50051"
 envFrom: []
 extraEnvVars: []
 extraEnvVarsCM: ""
