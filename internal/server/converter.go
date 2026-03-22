@@ -50,7 +50,7 @@ func SpanRowsToResourceSpans(rows []store.SpanRow) ([]*tracev1.ResourceSpans, er
 			resourceGroups[resourceHash] = group
 			resourceOrder = append(resourceOrder, resourceHash)
 		}
-		scopeHash := hashResourceScope(row.Resource, row.InstrumentationScope)
+		scopeHash := hashScope(row.InstrumentationScope)
 		scope, ok := group.scopes[scopeHash]
 		if !ok {
 			scopeValue, err := unmarshalInstrumentationScope(row.InstrumentationScope)
@@ -260,10 +260,8 @@ func wrapJSONArray(field string, data []byte) []byte {
 	return buf
 }
 
-func hashResourceScope(resource, scope []byte) [32]byte {
+func hashScope(scope []byte) [32]byte {
 	hasher := sha256.New()
-	_, _ = hasher.Write(resource)
-	_, _ = hasher.Write([]byte{0})
 	_, _ = hasher.Write(scope)
 	var sum [32]byte
 	copy(sum[:], hasher.Sum(nil))
