@@ -1,0 +1,5 @@
+version: v1
+
+deps:
+  - buf.build/agynio/api
+  - buf.build/opentelemetry/opentelemetry
