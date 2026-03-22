@@ -46,6 +46,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha,format=short,prefix=sha-
+            type=semver,pattern=v{{version}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
