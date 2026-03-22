@@ -39,8 +39,8 @@ WORKDIR /app
 
 COPY --from=build /out/tracing /app/tracing
 
-RUN addgroup -S app && adduser -S app -G app
+RUN addgroup -g 10001 -S app && adduser -u 10001 -S app -G app
 
-USER app
+USER 10001
 
 ENTRYPOINT ["/app/tracing"]
