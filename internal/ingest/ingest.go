@@ -55,7 +55,7 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 					log.Printf("ingest: upsert span: %v", err)
 					continue
 				}
-				if err := h.notifier.PublishSpanEvent(ctx, row.TraceID, isNew); err != nil {
+				if err := h.notifier.PublishSpanEvent(ctx, row.TraceID, row.SpanID, isNew); err != nil {
 					log.Printf("ingest: publish span event: %v", err)
 				}
 			}

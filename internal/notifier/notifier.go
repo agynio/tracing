@@ -24,14 +24,16 @@ func New(client notificationsv1.NotificationsServiceClient) *Notifier {
 	return &Notifier{client: client}
 }
 
-func (n *Notifier) PublishSpanEvent(ctx context.Context, traceID []byte, isNew bool) error {
+func (n *Notifier) PublishSpanEvent(ctx context.Context, traceID, spanID []byte, isNew bool) error {
 	event := spanUpdatedEvent
 	if isNew {
 		event = spanCreatedEvent
 	}
 	traceHex := hex.EncodeToString(traceID)
+	spanHex := hex.EncodeToString(spanID)
 	payload, err := structpb.NewStruct(map[string]any{
 		"trace_id": traceHex,
+		"span_id":  spanHex,
 	})
 	if err != nil {
 		return fmt.Errorf("build payload: %w", err)

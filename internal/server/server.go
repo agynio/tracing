@@ -102,6 +102,82 @@ func (s *Server) GetTrace(ctx context.Context, req *tracingv1.GetTraceRequest) (
 	return &tracingv1.GetTraceResponse{ResourceSpans: resourceSpans}, nil
 }
 
+func (s *Server) GetTraceSummary(ctx context.Context, req *tracingv1.GetTraceSummaryRequest) (*tracingv1.GetTraceSummaryResponse, error) {
+	if err := validateTraceID(req.GetTraceId()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "trace_id: %v", err)
+	}
+	summary, err := s.store.GetTraceSummary(ctx, req.GetTraceId())
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	countsByName := make(map[string]int64, len(summary.Rows))
+	var (
+		runningCount int64
+		okCount      int64
+		errorCount   int64
+	)
+	for _, row := range summary.Rows {
+		countsByName[row.Name] = row.NameCount
+		runningCount += row.RunningCount
+		okCount += row.OkCount
+		errorCount += row.ErrorCount
+	}
+	countsByStatus := map[string]int64{
+		tracingv1.SpanStatus_SPAN_STATUS_RUNNING.String(): runningCount,
+		tracingv1.SpanStatus_SPAN_STATUS_OK.String():      okCount,
+		tracingv1.SpanStatus_SPAN_STATUS_ERROR.String():   errorCount,
+	}
+	traceStatus := tracingv1.TraceStatus_TRACE_STATUS_COMPLETED
+	if runningCount > 0 {
+		traceStatus = tracingv1.TraceStatus_TRACE_STATUS_RUNNING
+	} else if errorCount > 0 {
+		traceStatus = tracingv1.TraceStatus_TRACE_STATUS_ERROR
+	}
+	return &tracingv1.GetTraceSummaryResponse{
+		TraceId:            summary.TraceID,
+		Status:             traceStatus,
+		FirstSpanStartTime: uint64(summary.FirstSpanStartTime),
+		LastSpanStartTime:  uint64(summary.LastSpanStartTime),
+		LastSpanEndTime:    uint64(summary.LastSpanEndTime),
+		CountsByName:       countsByName,
+		CountsByStatus:     countsByStatus,
+		TotalSpans:         summary.TotalSpans,
+	}, nil
+}
+
+func (s *Server) GetTraceSpanTotals(ctx context.Context, req *tracingv1.GetTraceSpanTotalsRequest) (*tracingv1.GetTraceSpanTotalsResponse, error) {
+	if err := validateTraceID(req.GetTraceId()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "trace_id: %v", err)
+	}
+	filter := store.TraceSpanTotalsFilter{
+		TraceID: req.GetTraceId(),
+	}
+	if len(req.GetNames()) > 0 {
+		filter.Names = req.GetNames()
+	}
+	if len(req.GetStatuses()) > 0 {
+		statuses, err := mapSpanStatuses(req.GetStatuses())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "statuses: %v", err)
+		}
+		filter.Statuses = statuses
+	}
+	result, err := s.store.GetTraceSpanTotals(ctx, filter)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &tracingv1.GetTraceSpanTotalsResponse{
+		SpanCount: result.SpanCount,
+		TokenUsage: &tracingv1.TokenUsageTotals{
+			InputTokens:          result.InputTokens,
+			OutputTokens:         result.OutputTokens,
+			CacheReadInputTokens: result.CacheReadInputTokens,
+			ReasoningTokens:      result.ReasoningTokens,
+			TotalTokens:          result.InputTokens + result.OutputTokens,
+		},
+	}, nil
+}
+
 func parseSpanFilter(filter *tracingv1.SpanFilter) (store.SpanFilter, error) {
 	if filter == nil {
 		return store.SpanFilter{}, nil
@@ -119,7 +195,9 @@ func parseSpanFilter(filter *tracingv1.SpanFilter) (store.SpanFilter, error) {
 		}
 		result.ParentSpanID = filter.GetParentSpanId()
 	}
-	if filter.GetName() != "" {
+	if len(filter.GetNames()) > 0 {
+		result.Names = filter.GetNames()
+	} else if filter.GetName() != "" {
 		result.Name = filter.GetName()
 	}
 	if filter.GetKind() != 0 {
@@ -137,11 +215,44 @@ func parseSpanFilter(filter *tracingv1.SpanFilter) (store.SpanFilter, error) {
 		}
 		result.StartTimeMax = int64(filter.GetStartTimeMax())
 	}
-	if filter.InProgress != nil {
+	if len(filter.GetStatuses()) > 0 {
+		statuses, err := mapSpanStatuses(filter.GetStatuses())
+		if err != nil {
+			return store.SpanFilter{}, fmt.Errorf("statuses: %w", err)
+		}
+		result.Statuses = statuses
+	} else if filter.InProgress != nil {
 		value := filter.GetInProgress()
 		result.InProgress = &value
 	}
 	return result, nil
+}
+
+func mapSpanStatuses(statuses []tracingv1.SpanStatus) ([]store.SpanStatus, error) {
+	values := make([]store.SpanStatus, 0, len(statuses))
+	for _, statusValue := range statuses {
+		status, err := spanStatusFromProto(statusValue)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, status)
+	}
+	return values, nil
+}
+
+func spanStatusFromProto(status tracingv1.SpanStatus) (store.SpanStatus, error) {
+	switch status {
+	case tracingv1.SpanStatus_SPAN_STATUS_RUNNING:
+		return store.SpanStatusRunning, nil
+	case tracingv1.SpanStatus_SPAN_STATUS_OK:
+		return store.SpanStatusOk, nil
+	case tracingv1.SpanStatus_SPAN_STATUS_ERROR:
+		return store.SpanStatusError, nil
+	case tracingv1.SpanStatus_SPAN_STATUS_UNSPECIFIED:
+		return 0, fmt.Errorf("status is unspecified")
+	default:
+		return 0, fmt.Errorf("invalid status: %d", status)
+	}
 }
 
 func orderByFromProto(orderBy tracingv1.ListSpansOrderBy) (store.OrderBy, error) {
