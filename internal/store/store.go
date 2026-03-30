@@ -12,6 +12,8 @@ import (
 
 const spanColumns = "trace_id, span_id, trace_state, parent_span_id, flags, name, kind, start_time_unix_nano, end_time_unix_nano, attributes, dropped_attributes_count, events, dropped_events_count, links, dropped_links_count, status_code, status_message, resource, instrumentation_scope"
 
+const spanStatusCaseExpr = "CASE WHEN end_time_unix_nano = 0 AND status_code != 2 THEN 1 WHEN end_time_unix_nano > 0 AND status_code != 2 THEN 2 WHEN status_code = 2 THEN 3 END"
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -128,6 +130,140 @@ func (s *Store) GetTrace(ctx context.Context, traceID []byte) ([]SpanRow, error)
 	return spans, nil
 }
 
+func (s *Store) GetTraceSummary(ctx context.Context, traceID []byte) (TraceSummary, error) {
+	query := `SELECT
+		name,
+		count(*) AS name_count,
+		min(start_time_unix_nano) AS first_start,
+		max(start_time_unix_nano) AS last_start,
+		max(end_time_unix_nano) AS last_end,
+		sum(CASE WHEN end_time_unix_nano = 0 AND status_code != 2 THEN 1 ELSE 0 END) AS running_count,
+		sum(CASE WHEN end_time_unix_nano > 0 AND status_code != 2 THEN 1 ELSE 0 END) AS ok_count,
+		sum(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) AS error_count
+	FROM spans
+	WHERE trace_id = $1
+	GROUP BY name`
+	rows, err := s.pool.Query(ctx, query, traceID)
+	if err != nil {
+		return TraceSummary{}, err
+	}
+	defer rows.Close()
+
+	summary := TraceSummary{TraceID: traceID}
+	initialized := false
+	for rows.Next() {
+		var (
+			name         string
+			nameCount    int64
+			firstStart   int64
+			lastStart    int64
+			lastEnd      int64
+			runningCount int64
+			okCount      int64
+			errorCount   int64
+		)
+		if err := rows.Scan(
+			&name,
+			&nameCount,
+			&firstStart,
+			&lastStart,
+			&lastEnd,
+			&runningCount,
+			&okCount,
+			&errorCount,
+		); err != nil {
+			return TraceSummary{}, err
+		}
+		summary.Rows = append(summary.Rows, TraceSummaryRow{
+			Name:         name,
+			NameCount:    nameCount,
+			RunningCount: runningCount,
+			OkCount:      okCount,
+			ErrorCount:   errorCount,
+		})
+		summary.TotalSpans += nameCount
+		if !initialized {
+			summary.FirstSpanStartTime = firstStart
+			summary.LastSpanStartTime = lastStart
+			summary.LastSpanEndTime = lastEnd
+			initialized = true
+			continue
+		}
+		if firstStart < summary.FirstSpanStartTime {
+			summary.FirstSpanStartTime = firstStart
+		}
+		if lastStart > summary.LastSpanStartTime {
+			summary.LastSpanStartTime = lastStart
+		}
+		if lastEnd > summary.LastSpanEndTime {
+			summary.LastSpanEndTime = lastEnd
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return TraceSummary{}, err
+	}
+	if !initialized {
+		return TraceSummary{}, ErrTraceNotFound
+	}
+	return summary, nil
+}
+
+func (s *Store) GetTraceSpanTotals(ctx context.Context, filter TraceSpanTotalsFilter) (TraceSpanTotals, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT
+		count(*) AS span_count,
+		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			FROM jsonb_array_elements(attributes) AS elem
+			WHERE elem->>'key' = 'gen_ai.usage.input_tokens' LIMIT 1), 0)) AS input_tokens,
+		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			FROM jsonb_array_elements(attributes) AS elem
+			WHERE elem->>'key' = 'gen_ai.usage.output_tokens' LIMIT 1), 0)) AS output_tokens,
+		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			FROM jsonb_array_elements(attributes) AS elem
+			WHERE elem->>'key' = 'gen_ai.usage.cache_read.input_tokens' LIMIT 1), 0)) AS cache_read_input_tokens,
+		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			FROM jsonb_array_elements(attributes) AS elem
+			WHERE elem->>'key' = 'agyn.usage.reasoning_tokens' LIMIT 1), 0)) AS reasoning_tokens
+	FROM spans`)
+
+	args := []any{}
+	conditions := []string{}
+	paramIndex := 1
+
+	conditions = append(conditions, fmt.Sprintf("trace_id = $%d", paramIndex))
+	args = append(args, filter.TraceID)
+	paramIndex++
+
+	if len(filter.Names) > 0 {
+		conditions = append(conditions, fmt.Sprintf("name = ANY($%d)", paramIndex))
+		args = append(args, filter.Names)
+		paramIndex++
+	}
+	if len(filter.Statuses) > 0 {
+		statusValues := spanStatusValues(filter.Statuses)
+		conditions = append(conditions, fmt.Sprintf("(%s) = ANY($%d)", spanStatusCaseExpr, paramIndex))
+		args = append(args, statusValues)
+		paramIndex++
+	}
+
+	if len(conditions) > 0 {
+		query.WriteString(" WHERE ")
+		query.WriteString(strings.Join(conditions, " AND "))
+	}
+
+	var totals TraceSpanTotals
+	if err := s.pool.QueryRow(ctx, query.String(), args...).Scan(
+		&totals.SpanCount,
+		&totals.InputTokens,
+		&totals.OutputTokens,
+		&totals.CacheReadInputTokens,
+		&totals.ReasoningTokens,
+	); err != nil {
+		return TraceSpanTotals{}, err
+	}
+	return totals, nil
+}
+
 func (s *Store) ListSpans(ctx context.Context, filter SpanFilter, pageSize int32, cursor *SpanCursor, orderBy OrderBy) (SpanListResult, error) {
 	limit := normalizePageSize(pageSize)
 	orderBy = normalizeOrderBy(orderBy)
@@ -151,7 +287,11 @@ func (s *Store) ListSpans(ctx context.Context, filter SpanFilter, pageSize int32
 		args = append(args, filter.ParentSpanID)
 		paramIndex++
 	}
-	if filter.Name != "" {
+	if len(filter.Names) > 0 {
+		conditions = append(conditions, fmt.Sprintf("name = ANY($%d)", paramIndex))
+		args = append(args, filter.Names)
+		paramIndex++
+	} else if filter.Name != "" {
 		conditions = append(conditions, fmt.Sprintf("name = $%d", paramIndex))
 		args = append(args, filter.Name)
 		paramIndex++
@@ -171,7 +311,12 @@ func (s *Store) ListSpans(ctx context.Context, filter SpanFilter, pageSize int32
 		args = append(args, filter.StartTimeMax)
 		paramIndex++
 	}
-	if filter.InProgress != nil {
+	if len(filter.Statuses) > 0 {
+		statusValues := spanStatusValues(filter.Statuses)
+		conditions = append(conditions, fmt.Sprintf("(%s) = ANY($%d)", spanStatusCaseExpr, paramIndex))
+		args = append(args, statusValues)
+		paramIndex++
+	} else if filter.InProgress != nil {
 		if *filter.InProgress {
 			conditions = append(conditions, "end_time_unix_nano = 0")
 		} else {
@@ -272,4 +417,12 @@ func nullableJSONText(data []byte) any {
 		return nil
 	}
 	return string(data)
+}
+
+func spanStatusValues(statuses []SpanStatus) []int16 {
+	values := make([]int16, len(statuses))
+	for i, status := range statuses {
+		values[i] = int16(status)
+	}
+	return values
 }

@@ -7,6 +7,14 @@ var (
 	ErrTraceNotFound = errors.New("trace not found")
 )
 
+type SpanStatus int16
+
+const (
+	SpanStatusRunning SpanStatus = 1 // end_time = 0, status_code != 2 (ERROR)
+	SpanStatusOk      SpanStatus = 2 // end_time > 0, status_code != 2
+	SpanStatusError   SpanStatus = 3 // status_code = 2
+)
+
 type SpanRow struct {
 	TraceID                []byte
 	SpanID                 []byte
@@ -33,10 +41,43 @@ type SpanFilter struct {
 	TraceID      []byte
 	ParentSpanID []byte
 	Name         string
+	Names        []string
 	Kind         int16
 	StartTimeMin int64
 	StartTimeMax int64
 	InProgress   *bool
+	Statuses     []SpanStatus
+}
+
+type TraceSummary struct {
+	TraceID            []byte
+	TotalSpans         int64
+	FirstSpanStartTime int64
+	LastSpanStartTime  int64
+	LastSpanEndTime    int64
+	Rows               []TraceSummaryRow
+}
+
+type TraceSummaryRow struct {
+	Name         string
+	NameCount    int64
+	RunningCount int64
+	OkCount      int64
+	ErrorCount   int64
+}
+
+type TraceSpanTotalsFilter struct {
+	TraceID  []byte
+	Names    []string
+	Statuses []SpanStatus
+}
+
+type TraceSpanTotals struct {
+	SpanCount            int64
+	InputTokens          int64
+	OutputTokens         int64
+	CacheReadInputTokens int64
+	ReasoningTokens      int64
 }
 
 type SpanCursor struct {
