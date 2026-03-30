@@ -212,43 +212,34 @@ func (s *Store) GetTraceSpanTotals(ctx context.Context, filter TraceSpanTotalsFi
 	query := strings.Builder{}
 	query.WriteString(`SELECT
 		count(*) AS span_count,
-		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+		COALESCE(sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
 			FROM jsonb_array_elements(attributes) AS elem
-			WHERE elem->>'key' = 'gen_ai.usage.input_tokens' LIMIT 1), 0)) AS input_tokens,
-		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			WHERE elem->>'key' = 'gen_ai.usage.input_tokens' LIMIT 1), 0)), 0) AS input_tokens,
+		COALESCE(sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
 			FROM jsonb_array_elements(attributes) AS elem
-			WHERE elem->>'key' = 'gen_ai.usage.output_tokens' LIMIT 1), 0)) AS output_tokens,
-		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			WHERE elem->>'key' = 'gen_ai.usage.output_tokens' LIMIT 1), 0)), 0) AS output_tokens,
+		COALESCE(sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
 			FROM jsonb_array_elements(attributes) AS elem
-			WHERE elem->>'key' = 'gen_ai.usage.cache_read.input_tokens' LIMIT 1), 0)) AS cache_read_input_tokens,
-		sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
+			WHERE elem->>'key' = 'gen_ai.usage.cache_read.input_tokens' LIMIT 1), 0)), 0) AS cache_read_input_tokens,
+		COALESCE(sum(COALESCE((SELECT (elem->'value'->>'intValue')::BIGINT
 			FROM jsonb_array_elements(attributes) AS elem
-			WHERE elem->>'key' = 'agyn.usage.reasoning_tokens' LIMIT 1), 0)) AS reasoning_tokens
-	FROM spans`)
+			WHERE elem->>'key' = 'agyn.usage.reasoning_tokens' LIMIT 1), 0)), 0) AS reasoning_tokens
+	FROM spans
+	WHERE trace_id = $1`)
 
-	args := []any{}
-	conditions := []string{}
-	paramIndex := 1
-
-	conditions = append(conditions, fmt.Sprintf("trace_id = $%d", paramIndex))
-	args = append(args, filter.TraceID)
-	paramIndex++
+	args := []any{filter.TraceID}
+	paramIndex := 2
 
 	if len(filter.Names) > 0 {
-		conditions = append(conditions, fmt.Sprintf("name = ANY($%d)", paramIndex))
+		query.WriteString(fmt.Sprintf(" AND name = ANY($%d)", paramIndex))
 		args = append(args, filter.Names)
 		paramIndex++
 	}
 	if len(filter.Statuses) > 0 {
 		statusValues := spanStatusValues(filter.Statuses)
-		conditions = append(conditions, fmt.Sprintf("(%s) = ANY($%d)", spanStatusCaseExpr, paramIndex))
+		query.WriteString(fmt.Sprintf(" AND (%s) = ANY($%d)", spanStatusCaseExpr, paramIndex))
 		args = append(args, statusValues)
 		paramIndex++
-	}
-
-	if len(conditions) > 0 {
-		query.WriteString(" WHERE ")
-		query.WriteString(strings.Join(conditions, " AND "))
 	}
 
 	var totals TraceSpanTotals
