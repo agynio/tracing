@@ -136,12 +136,16 @@ func spanToRow(span *tracev1.Span, resourceData, scopeData []byte) (store.SpanRo
 		}
 		statusMessage = status.GetMessage()
 	}
+	parentSpanID := span.GetParentSpanId()
+	if parentSpanID == nil {
+		parentSpanID = []byte{}
+	}
 
 	return store.SpanRow{
 		TraceID:                span.GetTraceId(),
 		SpanID:                 span.GetSpanId(),
 		TraceState:             span.GetTraceState(),
-		ParentSpanID:           span.GetParentSpanId(),
+		ParentSpanID:           parentSpanID,
 		Flags:                  flags,
 		Name:                   span.GetName(),
 		Kind:                   kind,
