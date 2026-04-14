@@ -23,7 +23,7 @@ jobs:
           version: 1.66.0
 
       - name: Generate protobuf bindings
-        run: buf generate buf.build/agynio/api --path agynio/api/tracing/v1 --path agynio/api/notifications/v1
+        run: buf generate buf.build/agynio/api --path agynio/api/tracing/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/ziti_management/v1
 
       - name: Run tests
         run: go test ./...
