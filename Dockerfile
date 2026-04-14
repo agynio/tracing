@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.8
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.25
 ARG BUF_VERSION=1.66.0
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS buf
@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY buf.gen.yaml buf.yaml ./
-RUN buf generate buf.build/agynio/api --path agynio/api/tracing/v1 --path agynio/api/notifications/v1
+RUN buf generate buf.build/agynio/api --path agynio/api/tracing/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/ziti_management/v1
 
 COPY . .
 
