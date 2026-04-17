@@ -28,10 +28,14 @@ func New(store *store.Store) *Server {
 }
 
 func (s *Server) ListSpans(ctx context.Context, req *tracingv1.ListSpansRequest) (*tracingv1.ListSpansResponse, error) {
+	if req.GetOrganizationId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "organization_id is required")
+	}
 	filter, err := parseSpanFilter(req.GetFilter())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "filter: %v", err)
 	}
+	filter.OrganizationID = req.GetOrganizationId()
 	orderBy, err := orderByFromProto(req.GetOrderBy())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "order_by: %v", err)
@@ -224,6 +228,9 @@ func parseSpanFilter(filter *tracingv1.SpanFilter) (store.SpanFilter, error) {
 	} else if filter.InProgress != nil {
 		value := filter.GetInProgress()
 		result.InProgress = &value
+	}
+	if filter.GetMessageId() != "" {
+		result.MessageID = filter.GetMessageId()
 	}
 	return result, nil
 }
