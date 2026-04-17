@@ -10,9 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const spanColumns = "trace_id, span_id, trace_state, parent_span_id, flags, name, kind, start_time_unix_nano, end_time_unix_nano, attributes, dropped_attributes_count, events, dropped_events_count, links, dropped_links_count, status_code, status_message, resource, instrumentation_scope"
-
-const spanStatusCaseExpr = "CASE WHEN end_time_unix_nano = 0 AND status_code != 2 THEN 1 WHEN end_time_unix_nano > 0 AND status_code != 2 THEN 2 WHEN status_code = 2 THEN 3 END"
+const (
+	spanColumns                = "trace_id, span_id, trace_state, parent_span_id, flags, name, kind, start_time_unix_nano, end_time_unix_nano, attributes, dropped_attributes_count, events, dropped_events_count, links, dropped_links_count, status_code, status_message, resource, instrumentation_scope"
+	spanStatusCaseExpr         = "CASE WHEN end_time_unix_nano = 0 AND status_code != 2 THEN 1 WHEN end_time_unix_nano > 0 AND status_code != 2 THEN 2 WHEN status_code = 2 THEN 3 END"
+	resourceAttrOrganizationID = "agyn.organization.id"
+)
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -268,9 +270,18 @@ func (s *Store) ListSpans(ctx context.Context, filter SpanFilter, pageSize int32
 	conditions := []string{}
 	paramIndex := 1
 
+	conditions = append(conditions, fmt.Sprintf("%s = $%d", resourceAttributeValueExpr(resourceAttrOrganizationID), paramIndex))
+	args = append(args, filter.OrganizationID)
+	paramIndex++
+
 	if len(filter.TraceID) > 0 {
 		conditions = append(conditions, fmt.Sprintf("trace_id = $%d", paramIndex))
 		args = append(args, filter.TraceID)
+		paramIndex++
+	}
+	if filter.MessageID != "" {
+		conditions = append(conditions, fmt.Sprintf("message_id = $%d", paramIndex))
+		args = append(args, filter.MessageID)
 		paramIndex++
 	}
 	if len(filter.ParentSpanID) > 0 {
@@ -408,6 +419,10 @@ func nullableJSONText(data []byte) any {
 		return nil
 	}
 	return string(data)
+}
+
+func resourceAttributeValueExpr(attribute string) string {
+	return fmt.Sprintf("(jsonb_path_query_first(COALESCE(resource, '{}'::jsonb), '$.attributes[*] ? (@.key == \"%s\").value.stringValue') #>> '{}')", attribute)
 }
 
 func spanStatusValues(statuses []SpanStatus) []int16 {

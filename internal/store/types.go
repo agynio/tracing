@@ -38,15 +38,17 @@ type SpanRow struct {
 }
 
 type SpanFilter struct {
-	TraceID      []byte
-	ParentSpanID []byte
-	Name         string
-	Names        []string
-	Kind         int16
-	StartTimeMin int64
-	StartTimeMax int64
-	InProgress   *bool
-	Statuses     []SpanStatus
+	OrganizationID string
+	TraceID        []byte
+	ParentSpanID   []byte
+	Name           string
+	Names          []string
+	Kind           int16
+	StartTimeMin   int64
+	StartTimeMax   int64
+	InProgress     *bool
+	Statuses       []SpanStatus
+	MessageID      string
 }
 
 type TraceSummary struct {

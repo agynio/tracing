@@ -22,6 +22,8 @@ const (
 	spanSummarization     = "summarization"
 
 	attrThreadID                   = "agyn.thread.id"
+	attrOrganizationID             = "agyn.organization.id"
+	attrMessageID                  = "agyn.thread.message.id"
 	attrMessageText                = "agyn.message.text"
 	attrMessageRole                = "agyn.message.role"
 	attrMessageKind                = "agyn.message.kind"
@@ -55,6 +57,11 @@ const (
 	defaultInvocationMessageRole   = "user"
 	defaultInvocationMessageKind   = "source"
 	defaultLLMToolCallResponseText = "Tool results"
+	defaultOrganizationID          = "11111111-1111-1111-1111-111111111111"
+	otherOrganizationID            = "22222222-2222-2222-2222-222222222222"
+	defaultMessageID               = "33333333-3333-3333-3333-333333333333"
+	otherMessageID                 = "44444444-4444-4444-4444-444444444444"
+	missingMessageID               = "55555555-5555-5555-5555-555555555555"
 )
 
 func TestIngestAndQuerySimpleTrace(t *testing.T) {
@@ -95,7 +102,8 @@ func TestIngestAndQuerySimpleTrace(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
-			Filter: &tracingv1.SpanFilter{TraceId: traceID},
+			OrganizationId: defaultOrganizationID,
+			Filter:         &tracingv1.SpanFilter{TraceId: traceID},
 		})
 		assert.NoError(c, err)
 		if err != nil {
@@ -241,6 +249,7 @@ func TestIngestToolExecutionSpan(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
 			Filter: &tracingv1.SpanFilter{
 				TraceId: traceID,
 				Names:   []string{spanToolExecution},
@@ -423,8 +432,9 @@ func TestMCPToolTrace(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
-			Filter:  &tracingv1.SpanFilter{TraceId: traceID},
-			OrderBy: tracingv1.ListSpansOrderBy_LIST_SPANS_ORDER_BY_START_TIME_ASC,
+			OrganizationId: defaultOrganizationID,
+			Filter:         &tracingv1.SpanFilter{TraceId: traceID},
+			OrderBy:        tracingv1.ListSpansOrderBy_LIST_SPANS_ORDER_BY_START_TIME_ASC,
 		})
 		assert.NoError(c, err)
 		if err != nil {
@@ -552,6 +562,7 @@ func TestUpsertInProgressSpan(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
 			Filter: &tracingv1.SpanFilter{
 				TraceId:  traceID,
 				Statuses: []tracingv1.SpanStatus{tracingv1.SpanStatus_SPAN_STATUS_RUNNING},
@@ -603,6 +614,7 @@ func TestUpsertInProgressSpan(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
 			Filter: &tracingv1.SpanFilter{
 				TraceId:  traceID,
 				Statuses: []tracingv1.SpanStatus{tracingv1.SpanStatus_SPAN_STATUS_OK},
@@ -672,6 +684,7 @@ func TestListSpansFiltering(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
 			Filter: &tracingv1.SpanFilter{
 				TraceId: traceID,
 				Names:   []string{spanLLMCall},
@@ -692,6 +705,7 @@ func TestListSpansFiltering(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
 			Filter: &tracingv1.SpanFilter{
 				TraceId:  traceID,
 				Statuses: []tracingv1.SpanStatus{tracingv1.SpanStatus_SPAN_STATUS_ERROR},
@@ -712,9 +726,10 @@ func TestListSpansFiltering(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
-			Filter:   &tracingv1.SpanFilter{TraceId: traceID},
-			PageSize: 2,
-			OrderBy:  tracingv1.ListSpansOrderBy_LIST_SPANS_ORDER_BY_START_TIME_ASC,
+			OrganizationId: defaultOrganizationID,
+			Filter:         &tracingv1.SpanFilter{TraceId: traceID},
+			PageSize:       2,
+			OrderBy:        tracingv1.ListSpansOrderBy_LIST_SPANS_ORDER_BY_START_TIME_ASC,
 		})
 		assert.NoError(c, err)
 		if err != nil {
@@ -728,10 +743,11 @@ func TestListSpansFiltering(t *testing.T) {
 		ctxNext, cancelNext := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancelNext()
 		secondResp, err := queryClient.ListSpans(ctxNext, &tracingv1.ListSpansRequest{
-			Filter:    &tracingv1.SpanFilter{TraceId: traceID},
-			PageSize:  2,
-			OrderBy:   tracingv1.ListSpansOrderBy_LIST_SPANS_ORDER_BY_START_TIME_ASC,
-			PageToken: listResp.GetNextPageToken(),
+			OrganizationId: defaultOrganizationID,
+			Filter:         &tracingv1.SpanFilter{TraceId: traceID},
+			PageSize:       2,
+			OrderBy:        tracingv1.ListSpansOrderBy_LIST_SPANS_ORDER_BY_START_TIME_ASC,
+			PageToken:      listResp.GetNextPageToken(),
 		})
 		assert.NoError(c, err)
 		if err != nil {
@@ -742,6 +758,105 @@ func TestListSpansFiltering(t *testing.T) {
 			return
 		}
 		assert.Empty(c, secondResp.GetNextPageToken())
+	})
+}
+
+func TestListSpansOrganizationAndMessageFilters(t *testing.T) {
+	traceID := newTraceID()
+	threadID := fmt.Sprintf("thread-%x", traceID)
+	startNs := uint64(time.Now().UnixNano())
+	orgSpan := buildSpan(
+		spanInvocationMessage,
+		traceID,
+		newSpanID(),
+		startNs,
+		startNs+1_000_000,
+		invocationMessageAttrs("Org scope"),
+	)
+	messageSpan := buildSpan(
+		spanLLMCall,
+		traceID,
+		newSpanID(),
+		startNs+2_000_000,
+		startNs+3_000_000,
+		llmCallAttrs("Message filter", 5, 2, 0, 0),
+	)
+	otherOrgSpan := buildSpan(
+		spanToolExecution,
+		traceID,
+		newSpanID(),
+		startNs+4_000_000,
+		startNs+5_000_000,
+		toolExecutionAttrs("org.tool", "{}", "ok", "call-org"),
+	)
+	resourceSpans := []*tracev1.ResourceSpans{
+		buildResourceSpans([]*tracev1.Span{orgSpan}, resourceAttrsWithMessageID(threadID, defaultOrganizationID, defaultMessageID)),
+		buildResourceSpans([]*tracev1.Span{messageSpan}, resourceAttrsWithMessageID(threadID, defaultOrganizationID, otherMessageID)),
+		buildResourceSpans([]*tracev1.Span{otherOrgSpan}, resourceAttrsWithMessageID(threadID, otherOrganizationID, defaultMessageID)),
+	}
+
+	collectorClient, queryClient := newTracingClients(t)
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	resp, err := exportSpans(ctx, collectorClient, resourceSpans)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), resp.GetPartialSuccess().GetRejectedSpans())
+
+	requireEventually(t, func(c *assert.CollectT) {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
+			Filter:         &tracingv1.SpanFilter{TraceId: traceID},
+		})
+		assert.NoError(c, err)
+		if err != nil {
+			return
+		}
+		spans := flattenSpans(listResp.GetResourceSpans())
+		if !assert.Len(c, spans, 2) {
+			return
+		}
+		assert.ElementsMatch(c, []string{spanInvocationMessage, spanLLMCall}, spanNames(spans))
+	})
+
+	requireEventually(t, func(c *assert.CollectT) {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
+			Filter: &tracingv1.SpanFilter{
+				TraceId:   traceID,
+				MessageId: defaultMessageID,
+			},
+		})
+		assert.NoError(c, err)
+		if err != nil {
+			return
+		}
+		spans := flattenSpans(listResp.GetResourceSpans())
+		if !assert.Len(c, spans, 1) {
+			return
+		}
+		assert.Equal(c, spanInvocationMessage, spans[0].GetName())
+	})
+
+	requireEventually(t, func(c *assert.CollectT) {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
+			Filter: &tracingv1.SpanFilter{
+				TraceId:   traceID,
+				MessageId: missingMessageID,
+			},
+		})
+		assert.NoError(c, err)
+		if err != nil {
+			return
+		}
+		spans := flattenSpans(listResp.GetResourceSpans())
+		assert.Empty(c, spans)
 	})
 }
 
@@ -847,7 +962,18 @@ func summarizationAttrs(text string, newContextCount, oldContextTokens int64) []
 }
 
 func resourceAttrs(threadID string) []*commonv1.KeyValue {
-	return []*commonv1.KeyValue{stringAttr(attrThreadID, threadID)}
+	return resourceAttrsWithMessageID(threadID, defaultOrganizationID, "")
+}
+
+func resourceAttrsWithMessageID(threadID, organizationID, messageID string) []*commonv1.KeyValue {
+	attrs := []*commonv1.KeyValue{
+		stringAttr(attrThreadID, threadID),
+		stringAttr(attrOrganizationID, organizationID),
+	}
+	if messageID != "" {
+		attrs = append(attrs, stringAttr(attrMessageID, messageID))
+	}
+	return attrs
 }
 
 func contextEvent(role, text string, isNew bool, sizeBytes int64, timestampNs uint64) *tracev1.Span_Event {
