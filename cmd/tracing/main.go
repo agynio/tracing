@@ -31,6 +31,7 @@ import (
 	"github.com/agynio/tracing/internal/notifier"
 	"github.com/agynio/tracing/internal/server"
 	"github.com/agynio/tracing/internal/store"
+	"github.com/agynio/tracing/internal/threadsclient"
 	"github.com/agynio/tracing/internal/ziticonn"
 	"github.com/agynio/tracing/internal/zitimanager"
 	"github.com/agynio/tracing/internal/zitimgmtclient"
@@ -78,6 +79,16 @@ func run() error {
 
 	st := store.NewStore(pool)
 	n := notifier.New(notificationsv1.NewNotificationsServiceClient(notificationsConn))
+
+	threadsClient, err := threadsclient.NewClient(cfg.ThreadsAddress)
+	if err != nil {
+		return fmt.Errorf("create threads client: %w", err)
+	}
+	defer func() {
+		if closeErr := threadsClient.Close(); closeErr != nil {
+			log.Printf("failed to close threads client: %v", closeErr)
+		}
+	}()
 
 	var zitiMgmtClient *zitimgmtclient.Client
 	var agentsClient *agentsclient.Client
@@ -135,7 +146,7 @@ func run() error {
 
 	grpcServer := grpc.NewServer()
 	tracingv1.RegisterTracingServiceServer(grpcServer, server.New(st))
-	collectortracev1.RegisterTraceServiceServer(grpcServer, ingest.NewHandler(st, n, identityResolver, threadAuthorizer))
+	collectortracev1.RegisterTraceServiceServer(grpcServer, ingest.NewHandler(st, n, identityResolver, threadAuthorizer, threadsClient))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {

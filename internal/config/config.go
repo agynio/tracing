@@ -12,6 +12,7 @@ const (
 	defaultGRPCAddress        = ":50051"
 	defaultAgentsServiceAddr  = "agents:50051"
 	defaultAuthzServiceAddr   = "authorization:50051"
+	defaultThreadsServiceAddr = "threads:50051"
 	defaultIdentityCacheSize  = 1000
 	defaultThreadAuthCache    = 1000
 	defaultZitiManagementAddr = "ziti-management:50051"
@@ -26,6 +27,7 @@ type Config struct {
 	NotificationsAddress     string
 	AgentsServiceAddress     string
 	AuthorizationAddress     string
+	ThreadsAddress           string
 	IdentityResolutionCache  int
 	ThreadAuthorizationCache int
 	ZitiEnabled              bool
@@ -89,6 +91,7 @@ func FromEnv() (Config, error) {
 		NotificationsAddress:     notificationsAddress,
 		AgentsServiceAddress:     envOrDefault("AGENTS_SERVICE_ADDRESS", defaultAgentsServiceAddr),
 		AuthorizationAddress:     envOrDefault("AUTHORIZATION_SERVICE_ADDRESS", defaultAuthzServiceAddr),
+		ThreadsAddress:           envOrDefault("THREADS_ADDRESS", defaultThreadsServiceAddr),
 		IdentityResolutionCache:  identityCacheSize,
 		ThreadAuthorizationCache: threadCacheSize,
 		ZitiEnabled:              zitiEnabled,

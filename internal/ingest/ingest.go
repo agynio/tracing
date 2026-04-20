@@ -26,7 +26,12 @@ const (
 	attrAgentID        = "agyn.agent.id"
 	attrOrganizationID = "agyn.organization.id"
 	attrThreadID       = "agyn.thread.id"
+	attrMessageID      = "agyn.thread.message.id"
 )
+
+type messageVerifier interface {
+	MessageBelongsToThread(ctx context.Context, threadID, messageID string) (bool, error)
+}
 
 type Handler struct {
 	collectortracev1.UnimplementedTraceServiceServer
@@ -34,14 +39,22 @@ type Handler struct {
 	notifier         *notifier.Notifier
 	identityResolver *identity.Resolver
 	threadAuthorizer *identity.ThreadAuthorizer
+	messageVerifier  messageVerifier
 }
 
-func NewHandler(store *store.Store, notifier *notifier.Notifier, identityResolver *identity.Resolver, threadAuthorizer *identity.ThreadAuthorizer) *Handler {
+func NewHandler(
+	store *store.Store,
+	notifier *notifier.Notifier,
+	identityResolver *identity.Resolver,
+	threadAuthorizer *identity.ThreadAuthorizer,
+	messageVerifier messageVerifier,
+) *Handler {
 	return &Handler{
 		store:            store,
 		notifier:         notifier,
 		identityResolver: identityResolver,
 		threadAuthorizer: threadAuthorizer,
+		messageVerifier:  messageVerifier,
 	}
 }
 
@@ -52,6 +65,7 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 	}
 
 	threadIDs := map[string]struct{}{}
+	messageIDsByThread := map[string]map[string]struct{}{}
 	for _, resourceSpans := range req.GetResourceSpans() {
 		if resourceSpans == nil {
 			continue
@@ -65,8 +79,23 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid %s: %v", attrThreadID, err)
 		}
+		messageID, err := resourceStringAttribute(resource, attrMessageID)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid %s: %v", attrMessageID, err)
+		}
+		if messageID != "" && threadID == "" {
+			return nil, status.Error(codes.InvalidArgument, "thread id is required for message verification")
+		}
 		if threadID != "" {
 			threadIDs[threadID] = struct{}{}
+		}
+		if messageID != "" {
+			messageIDs := messageIDsByThread[threadID]
+			if messageIDs == nil {
+				messageIDs = map[string]struct{}{}
+				messageIDsByThread[threadID] = messageIDs
+			}
+			messageIDs[messageID] = struct{}{}
 		}
 	}
 
@@ -81,6 +110,23 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 			}
 			if !allowed {
 				return nil, status.Error(codes.PermissionDenied, "thread access denied")
+			}
+		}
+	}
+
+	if len(messageIDsByThread) > 0 {
+		if h.messageVerifier == nil {
+			return nil, status.Error(codes.Internal, "message verification unavailable")
+		}
+		for threadID, messageIDs := range messageIDsByThread {
+			for messageID := range messageIDs {
+				ok, err := h.messageVerifier.MessageBelongsToThread(ctx, threadID, messageID)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "verify message: %v", err)
+				}
+				if !ok {
+					return nil, status.Errorf(codes.InvalidArgument, "message id %s does not belong to thread %s", messageID, threadID)
+				}
 			}
 		}
 	}
@@ -282,14 +328,15 @@ func injectIdentity(resource *resourcev1.Resource, chain identity.IdentityChain)
 }
 
 func upsertResourceAttribute(resource *resourcev1.Resource, key, value string) {
+	attrs := make([]*commonv1.KeyValue, 0, len(resource.Attributes)+1)
 	for _, attr := range resource.Attributes {
 		if attr.GetKey() == key {
-			attr.Value = &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: value}}
-			return
+			continue
 		}
+		attrs = append(attrs, attr)
 	}
-
-	resource.Attributes = append(resource.Attributes, stringAttr(key, value))
+	attrs = append(attrs, stringAttr(key, value))
+	resource.Attributes = attrs
 }
 
 func stringAttr(key, value string) *commonv1.KeyValue {
