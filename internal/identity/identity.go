@@ -26,6 +26,7 @@ type AgentIdentity struct {
 
 type IdentityChain struct {
 	IdentityID     string
+	IdentityType   identityv1.IdentityType
 	AgentID        string
 	OrganizationID string
 }
@@ -86,6 +87,7 @@ func (r *Resolver) Resolve(ctx context.Context, sourceIdentity string) (Identity
 
 	chain := IdentityChain{
 		IdentityID:     resolved.IdentityID,
+		IdentityType:   resolved.IdentityType,
 		AgentID:        agentIdentity.AgentID,
 		OrganizationID: agentIdentity.OrganizationID,
 	}

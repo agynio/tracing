@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	threadsv1 "github.com/agynio/tracing/.gen/go/agynio/api/threads/v1"
 )
@@ -38,15 +39,31 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-func (c *Client) MessageBelongsToThread(ctx context.Context, threadID, messageID string) (bool, error) {
+func (c *Client) MessageBelongsToThread(ctx context.Context, identityID, identityType, threadID, messageID string) (bool, error) {
+	identityID = strings.TrimSpace(identityID)
+	identityType = strings.TrimSpace(identityType)
 	threadID = strings.TrimSpace(threadID)
 	messageID = strings.TrimSpace(messageID)
+	if identityID == "" {
+		return false, fmt.Errorf("identity id is required")
+	}
+	if identityType == "" {
+		return false, fmt.Errorf("identity type is required")
+	}
 	if threadID == "" {
 		return false, fmt.Errorf("thread id is required")
 	}
 	if messageID == "" {
 		return false, fmt.Errorf("message id is required")
 	}
+
+	ctx = metadata.AppendToOutgoingContext(
+		ctx,
+		"x-identity-id",
+		identityID,
+		"x-identity-type",
+		identityType,
+	)
 
 	pageToken := ""
 	for {

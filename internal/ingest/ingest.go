@@ -30,7 +30,7 @@ const (
 )
 
 type messageVerifier interface {
-	MessageBelongsToThread(ctx context.Context, threadID, messageID string) (bool, error)
+	MessageBelongsToThread(ctx context.Context, identityID, identityType, threadID, messageID string) (bool, error)
 }
 
 type Handler struct {
@@ -115,12 +115,19 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 	}
 
 	if len(messageIDsByThread) > 0 {
+		if !hasIdentity {
+			return nil, status.Error(codes.Unauthenticated, "identity required for message verification")
+		}
 		if h.messageVerifier == nil {
 			return nil, status.Error(codes.Internal, "message verification unavailable")
 		}
+		identityType, err := identity.IdentityTypeMetadataValue(identityChain.IdentityType)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "identity type: %v", err)
+		}
 		for threadID, messageIDs := range messageIDsByThread {
 			for messageID := range messageIDs {
-				ok, err := h.messageVerifier.MessageBelongsToThread(ctx, threadID, messageID)
+				ok, err := h.messageVerifier.MessageBelongsToThread(ctx, identityChain.IdentityID, identityType, threadID, messageID)
 				if err != nil {
 					return nil, status.Errorf(codes.Internal, "verify message: %v", err)
 				}
