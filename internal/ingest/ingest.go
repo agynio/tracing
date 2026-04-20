@@ -5,28 +5,91 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 
 	collectortracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
+	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/agynio/tracing/internal/identity"
 	"github.com/agynio/tracing/internal/notifier"
 	"github.com/agynio/tracing/internal/server"
 	"github.com/agynio/tracing/internal/store"
+	"github.com/agynio/tracing/internal/ziticonn"
+)
+
+const (
+	attrIdentityID     = "agyn.identity.id"
+	attrAgentID        = "agyn.agent.id"
+	attrOrganizationID = "agyn.organization.id"
+	attrThreadID       = "agyn.thread.id"
 )
 
 type Handler struct {
 	collectortracev1.UnimplementedTraceServiceServer
-	store    *store.Store
-	notifier *notifier.Notifier
+	store            *store.Store
+	notifier         *notifier.Notifier
+	identityResolver *identity.Resolver
+	threadAuthorizer *identity.ThreadAuthorizer
 }
 
-func NewHandler(store *store.Store, notifier *notifier.Notifier) *Handler {
-	return &Handler{store: store, notifier: notifier}
+func NewHandler(store *store.Store, notifier *notifier.Notifier, identityResolver *identity.Resolver, threadAuthorizer *identity.ThreadAuthorizer) *Handler {
+	return &Handler{
+		store:            store,
+		notifier:         notifier,
+		identityResolver: identityResolver,
+		threadAuthorizer: threadAuthorizer,
+	}
 }
 
 func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceServiceRequest) (*collectortracev1.ExportTraceServiceResponse, error) {
+	identityChain, hasIdentity, err := h.resolveIdentityChain(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	threadIDs := map[string]struct{}{}
+	for _, resourceSpans := range req.GetResourceSpans() {
+		if resourceSpans == nil {
+			continue
+		}
+		resource := ensureResource(resourceSpans)
+		if hasIdentity {
+			injectIdentity(resource, identityChain)
+		}
+
+		threadID, err := resourceStringAttribute(resource, attrThreadID)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid %s: %v", attrThreadID, err)
+		}
+		if threadID != "" {
+			threadIDs[threadID] = struct{}{}
+		}
+	}
+
+	if hasIdentity && len(threadIDs) > 0 {
+		if h.threadAuthorizer == nil {
+			return nil, status.Error(codes.Internal, "thread authorization unavailable")
+		}
+		for threadID := range threadIDs {
+			allowed, err := h.threadAuthorizer.CanRead(ctx, identityChain.IdentityID, threadID)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "authorize thread: %v", err)
+			}
+			if !allowed {
+				return nil, status.Error(codes.PermissionDenied, "thread access denied")
+			}
+		}
+	}
+
 	var rejectedSpans int64
 	for _, resourceSpans := range req.GetResourceSpans() {
+		if resourceSpans == nil {
+			continue
+		}
 		resourceData, err := server.MarshalResource(resourceSpans.GetResource())
 		if err != nil {
 			count := countResourceSpans(resourceSpans)
@@ -70,6 +133,24 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 		}
 	}
 	return resp, nil
+}
+
+func (h *Handler) resolveIdentityChain(ctx context.Context) (identity.IdentityChain, bool, error) {
+	if h.identityResolver == nil {
+		return identity.IdentityChain{}, false, nil
+	}
+
+	sourceIdentity, ok := ziticonn.SourceIdentityFromContext(ctx)
+	if !ok {
+		return identity.IdentityChain{}, false, status.Error(codes.Unauthenticated, "source identity missing")
+	}
+
+	chain, err := h.identityResolver.Resolve(ctx, sourceIdentity)
+	if err != nil {
+		return identity.IdentityChain{}, false, status.Errorf(codes.Unauthenticated, "resolve identity: %v", err)
+	}
+
+	return chain, true, nil
 }
 
 func countResourceSpans(resourceSpans *tracev1.ResourceSpans) int {
@@ -183,4 +264,63 @@ func toInt16(value int32, field string) (int16, error) {
 		return 0, fmt.Errorf("%s overflows int16", field)
 	}
 	return int16(value), nil
+}
+
+func ensureResource(resourceSpans *tracev1.ResourceSpans) *resourcev1.Resource {
+	resource := resourceSpans.GetResource()
+	if resource == nil {
+		resource = &resourcev1.Resource{}
+		resourceSpans.Resource = resource
+	}
+	return resource
+}
+
+func injectIdentity(resource *resourcev1.Resource, chain identity.IdentityChain) {
+	upsertResourceAttribute(resource, attrIdentityID, chain.IdentityID)
+	upsertResourceAttribute(resource, attrAgentID, chain.AgentID)
+	upsertResourceAttribute(resource, attrOrganizationID, chain.OrganizationID)
+}
+
+func upsertResourceAttribute(resource *resourcev1.Resource, key, value string) {
+	for _, attr := range resource.Attributes {
+		if attr.GetKey() == key {
+			attr.Value = &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: value}}
+			return
+		}
+	}
+
+	resource.Attributes = append(resource.Attributes, stringAttr(key, value))
+}
+
+func stringAttr(key, value string) *commonv1.KeyValue {
+	return &commonv1.KeyValue{
+		Key:   key,
+		Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: value}},
+	}
+}
+
+func resourceStringAttribute(resource *resourcev1.Resource, key string) (string, error) {
+	if resource == nil {
+		return "", nil
+	}
+	for _, attr := range resource.Attributes {
+		if attr.GetKey() != key {
+			continue
+		}
+		value := attr.GetValue()
+		if value == nil {
+			return "", fmt.Errorf("attribute value missing")
+		}
+		switch typed := value.GetValue().(type) {
+		case *commonv1.AnyValue_StringValue:
+			trimmed := strings.TrimSpace(typed.StringValue)
+			if trimmed == "" {
+				return "", fmt.Errorf("attribute value is empty")
+			}
+			return trimmed, nil
+		default:
+			return "", fmt.Errorf("attribute value must be a string")
+		}
+	}
+	return "", nil
 }

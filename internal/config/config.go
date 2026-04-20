@@ -10,6 +10,10 @@ import (
 
 const (
 	defaultGRPCAddress        = ":50051"
+	defaultAgentsServiceAddr  = "agents:50051"
+	defaultAuthzServiceAddr   = "authorization:50051"
+	defaultIdentityCacheSize  = 1000
+	defaultThreadAuthCache    = 1000
 	defaultZitiManagementAddr = "ziti-management:50051"
 	defaultZitiServiceName    = "tracing"
 	defaultZitiLeaseInterval  = 2 * time.Minute
@@ -20,6 +24,10 @@ type Config struct {
 	GRPCAddress              string
 	DatabaseURL              string
 	NotificationsAddress     string
+	AgentsServiceAddress     string
+	AuthorizationAddress     string
+	IdentityResolutionCache  int
+	ThreadAuthorizationCache int
 	ZitiEnabled              bool
 	ZitiManagementAddress    string
 	ZitiServiceName          string
@@ -59,10 +67,30 @@ func FromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("NOTIFICATIONS_ADDRESS must be set")
 	}
 
+	identityCacheSize, err := envInt("IDENTITY_RESOLUTION_CACHE_SIZE", defaultIdentityCacheSize)
+	if err != nil {
+		return Config{}, err
+	}
+	if identityCacheSize <= 0 {
+		return Config{}, fmt.Errorf("IDENTITY_RESOLUTION_CACHE_SIZE must be positive")
+	}
+
+	threadCacheSize, err := envInt("THREAD_AUTH_CACHE_SIZE", defaultThreadAuthCache)
+	if err != nil {
+		return Config{}, err
+	}
+	if threadCacheSize <= 0 {
+		return Config{}, fmt.Errorf("THREAD_AUTH_CACHE_SIZE must be positive")
+	}
+
 	return Config{
 		GRPCAddress:              envOrDefault("GRPC_ADDRESS", defaultGRPCAddress),
 		DatabaseURL:              databaseURL,
 		NotificationsAddress:     notificationsAddress,
+		AgentsServiceAddress:     envOrDefault("AGENTS_SERVICE_ADDRESS", defaultAgentsServiceAddr),
+		AuthorizationAddress:     envOrDefault("AUTHORIZATION_SERVICE_ADDRESS", defaultAuthzServiceAddr),
+		IdentityResolutionCache:  identityCacheSize,
+		ThreadAuthorizationCache: threadCacheSize,
 		ZitiEnabled:              zitiEnabled,
 		ZitiManagementAddress:    envOrDefault("ZITI_MANAGEMENT_ADDRESS", defaultZitiManagementAddr),
 		ZitiServiceName:          envOrDefault("ZITI_SERVICE_NAME", defaultZitiServiceName),
@@ -101,6 +129,20 @@ func envDuration(name string, fallback time.Duration) (time.Duration, error) {
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid duration: %w", name, err)
+	}
+
+	return parsed, nil
+}
+
+func envInt(name string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", name, err)
 	}
 
 	return parsed, nil

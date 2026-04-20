@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	zitimgmtv1 "github.com/agynio/tracing/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/agynio/tracing/internal/identity"
 )
 
 type Client struct {
@@ -71,4 +72,31 @@ func (c *Client) ExtendIdentityLease(ctx context.Context, zitiIdentityID string)
 		ZitiIdentityId: trimmed,
 	})
 	return err
+}
+
+func (c *Client) ResolveIdentity(ctx context.Context, sourceIdentity string) (identity.ResolvedIdentity, error) {
+	trimmed := strings.TrimSpace(sourceIdentity)
+	if trimmed == "" {
+		return identity.ResolvedIdentity{}, fmt.Errorf("source identity is required")
+	}
+
+	response, err := c.client.ResolveIdentity(ctx, &zitimgmtv1.ResolveIdentityRequest{ZitiIdentityId: trimmed})
+	if err != nil {
+		return identity.ResolvedIdentity{}, err
+	}
+
+	identityID := strings.TrimSpace(response.GetIdentityId())
+	if identityID == "" {
+		return identity.ResolvedIdentity{}, fmt.Errorf("identity id missing")
+	}
+
+	identityType := response.GetIdentityType()
+	if identityType == 0 {
+		return identity.ResolvedIdentity{}, fmt.Errorf("identity type missing")
+	}
+
+	return identity.ResolvedIdentity{
+		IdentityID:   identityID,
+		IdentityType: identityType,
+	}, nil
 }
