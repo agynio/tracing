@@ -143,6 +143,12 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 		if resourceSpans == nil {
 			continue
 		}
+		resource := resourceSpans.GetResource()
+		organizationID, err := resourceStringAttribute(resource, attrOrganizationID)
+		if err != nil {
+			log.Printf("ingest: invalid %s: %v", attrOrganizationID, err)
+			organizationID = ""
+		}
 		resourceData, err := server.MarshalResource(resourceSpans.GetResource())
 		if err != nil {
 			count := countResourceSpans(resourceSpans)
@@ -171,7 +177,7 @@ func (h *Handler) Export(ctx context.Context, req *collectortracev1.ExportTraceS
 					log.Printf("ingest: upsert span: %v", err)
 					continue
 				}
-				if err := h.notifier.PublishSpanEvent(ctx, row.TraceID, row.SpanID, isNew); err != nil {
+				if err := h.notifier.PublishSpanEvent(ctx, row.TraceID, row.SpanID, organizationID, isNew); err != nil {
 					log.Printf("ingest: publish span event: %v", err)
 				}
 			}
