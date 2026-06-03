@@ -763,6 +763,7 @@ func TestListSpansFiltering(t *testing.T) {
 
 func TestListSpansOrganizationAndMessageFilters(t *testing.T) {
 	traceID := newTraceID()
+	transportTraceID := newTraceID()
 	threadID := fmt.Sprintf("thread-%x", traceID)
 	startNs := uint64(time.Now().UnixNano())
 	orgSpan := buildSpan(
@@ -789,10 +790,19 @@ func TestListSpansOrganizationAndMessageFilters(t *testing.T) {
 		startNs+5_000_000,
 		toolExecutionAttrs("org.tool", "{}", "ok", "call-org"),
 	)
+	transportSpan := buildSpan(
+		"h2.grpc.client",
+		transportTraceID,
+		newSpanID(),
+		startNs+6_000_000,
+		startNs+7_000_000,
+		[]*commonv1.KeyValue{stringAttr("rpc.system", "grpc")},
+	)
 	resourceSpans := []*tracev1.ResourceSpans{
 		buildResourceSpans([]*tracev1.Span{orgSpan}, resourceAttrsWithMessageID(threadID, defaultOrganizationID, defaultMessageID)),
 		buildResourceSpans([]*tracev1.Span{messageSpan}, resourceAttrsWithMessageID(threadID, defaultOrganizationID, otherMessageID)),
 		buildResourceSpans([]*tracev1.Span{otherOrgSpan}, resourceAttrsWithMessageID(threadID, otherOrganizationID, defaultMessageID)),
+		buildResourceSpans([]*tracev1.Span{transportSpan}, resourceAttrsWithMessageID(threadID, defaultOrganizationID, defaultMessageID)),
 	}
 
 	collectorClient, queryClient := newTracingClients(t)
@@ -839,6 +849,28 @@ func TestListSpansOrganizationAndMessageFilters(t *testing.T) {
 			return
 		}
 		assert.Equal(c, spanInvocationMessage, spans[0].GetName())
+		assert.Equal(c, traceID, spans[0].GetTraceId())
+	})
+
+	requireEventually(t, func(c *assert.CollectT) {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		listResp, err := queryClient.ListSpans(ctx, &tracingv1.ListSpansRequest{
+			OrganizationId: defaultOrganizationID,
+			Filter: &tracingv1.SpanFilter{
+				TraceId:   transportTraceID,
+				MessageId: defaultMessageID,
+			},
+		})
+		assert.NoError(c, err)
+		if err != nil {
+			return
+		}
+		spans := flattenSpans(listResp.GetResourceSpans())
+		if !assert.Len(c, spans, 1) {
+			return
+		}
+		assert.Equal(c, "h2.grpc.client", spans[0].GetName())
 	})
 
 	requireEventually(t, func(c *assert.CollectT) {

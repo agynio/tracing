@@ -20,10 +20,18 @@ const (
 
 type Server struct {
 	tracingv1.UnimplementedTracingServiceServer
-	store *store.Store
+	store spanStore
 }
 
-func New(store *store.Store) *Server {
+type spanStore interface {
+	ListSpans(ctx context.Context, filter store.SpanFilter, pageSize int32, cursor *store.SpanCursor, orderBy store.OrderBy) (store.SpanListResult, error)
+	GetSpan(ctx context.Context, traceID, spanID []byte) (store.SpanRow, error)
+	GetTrace(ctx context.Context, traceID []byte) ([]store.SpanRow, error)
+	GetTraceSummary(ctx context.Context, traceID []byte) (store.TraceSummary, error)
+	GetTraceSpanTotals(ctx context.Context, filter store.TraceSpanTotalsFilter) (store.TraceSpanTotals, error)
+}
+
+func New(store spanStore) *Server {
 	return &Server{store: store}
 }
 
@@ -125,6 +133,9 @@ func (s *Server) GetTraceSummary(ctx context.Context, req *tracingv1.GetTraceSum
 		runningCount += row.RunningCount
 		okCount += row.OkCount
 		errorCount += row.ErrorCount
+	}
+	for category, count := range summary.CategoryCounts {
+		countsByName[string(category)] = count
 	}
 	countsByStatus := map[string]int64{
 		tracingv1.SpanStatus_SPAN_STATUS_RUNNING.String(): runningCount,

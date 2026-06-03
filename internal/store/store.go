@@ -7,19 +7,34 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
 	spanColumns        = "trace_id, span_id, trace_state, parent_span_id, flags, name, kind, start_time_unix_nano, end_time_unix_nano, attributes, dropped_attributes_count, events, dropped_events_count, links, dropped_links_count, status_code, status_message, resource, instrumentation_scope"
 	spanStatusCaseExpr = "CASE WHEN end_time_unix_nano = 0 AND status_code != 2 THEN 1 WHEN end_time_unix_nano > 0 AND status_code != 2 THEN 2 WHEN status_code = 2 THEN 3 END"
+	messageSpanExpr    = "(name = 'invocation.message' OR attributes @> '[{\"key\": \"agyn.message.text\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.message.role\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.message.kind\"}]'::jsonb)"
+	llmSpanExpr        = "(name = 'llm.call' OR attributes @> '[{\"key\": \"gen_ai.system\"}]'::jsonb OR attributes @> '[{\"key\": \"gen_ai.request.model\"}]'::jsonb OR attributes @> '[{\"key\": \"gen_ai.response.finish_reason\"}]'::jsonb)"
+	toolSpanExpr       = "(name = 'tool.execution' OR attributes @> '[{\"key\": \"agyn.tool.name\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.tool.input\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.tool.output\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.tool.call_id\"}]'::jsonb)"
+	appSpanExpr        = "(" + messageSpanExpr + " OR " + llmSpanExpr + " OR " + toolSpanExpr + " OR name = 'summarization' OR attributes @> '[{\"key\": \"agyn.summarization.text\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.summarization.new_context_count\"}]'::jsonb OR attributes @> '[{\"key\": \"agyn.summarization.old_context_tokens\"}]'::jsonb)"
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool querier
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+type querier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func newStoreWithQuerier(pool querier) *Store {
 	return &Store{pool: pool}
 }
 
@@ -206,7 +221,30 @@ func (s *Store) GetTraceSummary(ctx context.Context, traceID []byte) (TraceSumma
 	if !initialized {
 		return TraceSummary{}, ErrTraceNotFound
 	}
+	categoryCounts, err := s.getTraceCategoryCounts(ctx, traceID)
+	if err != nil {
+		return TraceSummary{}, err
+	}
+	summary.CategoryCounts = categoryCounts
 	return summary, nil
+}
+
+func (s *Store) getTraceCategoryCounts(ctx context.Context, traceID []byte) (map[SpanCategory]int64, error) {
+	query := fmt.Sprintf(`SELECT
+		COALESCE(sum(CASE WHEN %s THEN 1 ELSE 0 END), 0) AS message_count,
+		COALESCE(sum(CASE WHEN %s THEN 1 ELSE 0 END), 0) AS llm_count,
+		COALESCE(sum(CASE WHEN %s THEN 1 ELSE 0 END), 0) AS tool_count
+	FROM spans
+	WHERE trace_id = $1`, messageSpanExpr, llmSpanExpr, toolSpanExpr)
+	categoryCounts := map[SpanCategory]int64{}
+	var messageCount, llmCount, toolCount int64
+	if err := s.pool.QueryRow(ctx, query, traceID).Scan(&messageCount, &llmCount, &toolCount); err != nil {
+		return nil, err
+	}
+	categoryCounts[SpanCategoryMessage] = messageCount
+	categoryCounts[SpanCategoryLLM] = llmCount
+	categoryCounts[SpanCategoryTool] = toolCount
+	return categoryCounts, nil
 }
 
 func (s *Store) GetTraceSpanTotals(ctx context.Context, filter TraceSpanTotalsFilter) (TraceSpanTotals, error) {
@@ -282,6 +320,9 @@ func (s *Store) ListSpans(ctx context.Context, filter SpanFilter, pageSize int32
 		conditions = append(conditions, fmt.Sprintf("message_id = $%d", paramIndex))
 		args = append(args, filter.MessageID)
 		paramIndex++
+		if len(filter.TraceID) == 0 && filter.Name == "" && len(filter.Names) == 0 && filter.Kind == 0 && len(filter.ParentSpanID) == 0 {
+			conditions = append(conditions, appSpanExpr)
+		}
 	}
 	if len(filter.ParentSpanID) > 0 {
 		conditions = append(conditions, fmt.Sprintf("parent_span_id = $%d", paramIndex))

@@ -51,6 +51,14 @@ type SpanFilter struct {
 	MessageID      string
 }
 
+type SpanCategory string
+
+const (
+	SpanCategoryMessage SpanCategory = "message"
+	SpanCategoryLLM     SpanCategory = "llm"
+	SpanCategoryTool    SpanCategory = "tool"
+)
+
 type TraceSummary struct {
 	TraceID            []byte
 	TotalSpans         int64
@@ -58,6 +66,7 @@ type TraceSummary struct {
 	LastSpanStartTime  int64
 	LastSpanEndTime    int64
 	Rows               []TraceSummaryRow
+	CategoryCounts     map[SpanCategory]int64
 }
 
 type TraceSummaryRow struct {
