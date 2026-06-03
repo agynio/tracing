@@ -43,6 +43,40 @@ func TestListSpansMessageIDPrefersApplicationSpans(t *testing.T) {
 	}
 }
 
+func TestListSpansMessageIDUsesGeneratedColumn(t *testing.T) {
+	matcher := newQueryRecorder(t)
+	mock, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(matcher))
+	if err != nil {
+		t.Fatalf("create pgx mock: %v", err)
+	}
+	defer mock.Close()
+
+	filter := SpanFilter{
+		OrganizationID: "org-id",
+		MessageID:      "message-id",
+	}
+
+	mock.ExpectQuery("list message spans").
+		WithArgs(filter.OrganizationID, filter.MessageID, 51).
+		WillReturnRows(emptySpanRows())
+
+	_, err = newStoreWithQuerier(mock).ListSpans(context.Background(), filter, 50, nil, OrderByStartTimeDesc)
+	if err != nil {
+		t.Fatalf("list spans: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+
+	query := matcher.queries[0]
+	if !containsAll(query, "message_id = $2") {
+		t.Fatalf("expected message lookup to use generated message_id column, got %s", query)
+	}
+	if containsAll(query, "agyn.thread.message.id") {
+		t.Fatalf("expected message lookup to avoid duplicating generated-column expression, got %s", query)
+	}
+}
+
 func TestListSpansMessageIDTraceScopedKeepsExactTrace(t *testing.T) {
 	matcher := newQueryRecorder(t)
 	mock, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(matcher))
