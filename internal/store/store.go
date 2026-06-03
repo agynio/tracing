@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,10 +21,20 @@ const (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool querier
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+type querier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func newStoreWithQuerier(pool querier) *Store {
 	return &Store{pool: pool}
 }
 
