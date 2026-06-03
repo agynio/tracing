@@ -126,6 +126,9 @@ func (s *Server) GetTraceSummary(ctx context.Context, req *tracingv1.GetTraceSum
 		okCount += row.OkCount
 		errorCount += row.ErrorCount
 	}
+	for category, count := range summary.CategoryCounts {
+		countsByName[string(category)] = count
+	}
 	countsByStatus := map[string]int64{
 		tracingv1.SpanStatus_SPAN_STATUS_RUNNING.String(): runningCount,
 		tracingv1.SpanStatus_SPAN_STATUS_OK.String():      okCount,
