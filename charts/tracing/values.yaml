@@ -1,5 +1,5 @@
 nameOverride: ""
-fullnameOverride: ""
+fullnameOverride: "tracing"
 
 global:
   imageRegistry: ""
@@ -73,9 +73,14 @@ env:
   - name: GRPC_ADDRESS
     value: ":50051"
   - name: DATABASE_URL
-    value: ""
+    valueFrom:
+      secretKeyRef:
+        name: agyn-platform-database-urls
+        key: tracing
   - name: NOTIFICATIONS_ADDRESS
     value: "notifications:50051"
+  - name: ZITI_MANAGEMENT_ADDRESS
+    value: "ziti-management:50051"
 envFrom: []
 extraEnvVars: []
 extraEnvVarsCM: ""
