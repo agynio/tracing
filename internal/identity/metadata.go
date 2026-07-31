@@ -7,16 +7,19 @@ import (
 )
 
 const (
-	identityTypeAgent  = "agent"
-	identityTypeRunner = "runner"
-	identityTypeUser   = "user"
-	identityTypeApp    = "app"
+	identityTypeAgent         = "agent"
+	identityTypeAgentInstance = "agent_instance"
+	identityTypeRunner        = "runner"
+	identityTypeUser          = "user"
+	identityTypeApp           = "app"
 )
 
 func IdentityTypeMetadataValue(identityType identityv1.IdentityType) (string, error) {
 	switch identityType {
 	case identityv1.IdentityType_IDENTITY_TYPE_AGENT:
 		return identityTypeAgent, nil
+	case identityv1.IdentityType_IDENTITY_TYPE_AGENT_INSTANCE:
+		return identityTypeAgentInstance, nil
 	case identityv1.IdentityType_IDENTITY_TYPE_RUNNER:
 		return identityTypeRunner, nil
 	case identityv1.IdentityType_IDENTITY_TYPE_USER:
