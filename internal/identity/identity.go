@@ -31,6 +31,19 @@ type IdentityChain struct {
 	OrganizationID string
 }
 
+// isAgentIdentityType reports whether the identity belongs to a running agent.
+// Workloads authenticate as their instance; identities minted before instances
+// existed still present the class type, and both resolve to an agent and org.
+func isAgentIdentityType(identityType identityv1.IdentityType) bool {
+	switch identityType {
+	case identityv1.IdentityType_IDENTITY_TYPE_AGENT,
+		identityv1.IdentityType_IDENTITY_TYPE_AGENT_INSTANCE:
+		return true
+	default:
+		return false
+	}
+}
+
 type ZitiResolver interface {
 	ResolveIdentity(ctx context.Context, sourceIdentity string) (ResolvedIdentity, error)
 }
@@ -76,8 +89,8 @@ func (r *Resolver) Resolve(ctx context.Context, sourceIdentity string) (Identity
 	if err != nil {
 		return IdentityChain{}, fmt.Errorf("resolve ziti identity: %w", err)
 	}
-	if resolved.IdentityType != identityv1.IdentityType_IDENTITY_TYPE_AGENT {
-		return IdentityChain{}, fmt.Errorf("identity type is not agent: %s", resolved.IdentityType.String())
+	if !isAgentIdentityType(resolved.IdentityType) {
+		return IdentityChain{}, fmt.Errorf("identity type is not an agent: %s", resolved.IdentityType.String())
 	}
 
 	agentIdentity, err := r.agentsResolver.ResolveAgentIdentity(ctx, resolved.IdentityID)
