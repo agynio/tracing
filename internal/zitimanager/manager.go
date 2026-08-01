@@ -24,6 +24,11 @@ const (
 	retryUnlimited      = 0
 )
 
+// ErrIdentityLost reports that the service's OpenZiti identity no longer
+// exists (garbage-collected while the pod was running). Recovery is a pod
+// restart: a fresh pod enrolls a fresh identity.
+var ErrIdentityLost = errors.New("ziti identity lost")
+
 var (
 	errIdentityNotFound = errors.New("ziti identity not found")
 	newZitiContext      = ziti.NewContext
@@ -43,11 +48,6 @@ type Manager struct {
 
 	listenerFactory ListenerFactory
 	onNewListener   OnNewListener
-
-	reEnrollMu     sync.Mutex
-	reEnrollWait   chan struct{}
-	reEnrollActive bool
-	reEnrollErr    error
 }
 
 func New(
@@ -97,31 +97,36 @@ func New(
 	return manager, nil
 }
 
-func (m *Manager) RunLeaseRenewal(ctx context.Context) {
+// RunLeaseRenewal extends the identity lease until ctx is cancelled (returns
+// nil) or the identity is definitively gone (returns an error wrapping
+// ErrIdentityLost). Identity loss is fatal by design: the caller must log the
+// error and terminate so the pod restart path enrolls a fresh identity.
+// Transient extension failures are retried with backoff and logged.
+func (m *Manager) RunLeaseRenewal(ctx context.Context) error {
 	ticker := time.NewTicker(m.renewalInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 		}
 
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 
 		err := m.extendLease(ctx)
 		switch {
 		case err == nil:
 			continue
+		case ctx.Err() != nil:
+			return nil
 		case errors.Is(err, errIdentityNotFound):
-			if enrollErr := m.reEnroll(ctx); enrollErr != nil {
-				log.Printf("failed to re-enroll ziti identity: %v", enrollErr)
-			}
+			return fmt.Errorf("%w: identity %s no longer exists", ErrIdentityLost, m.currentIdentityID())
 		default:
-			log.Printf("failed to extend ziti lease: %v", err)
+			log.Printf("failed to extend ziti lease for identity %s: %v", m.currentIdentityID(), err)
 		}
 	}
 }
@@ -173,47 +178,6 @@ func (m *Manager) extendLease(ctx context.Context) error {
 	return err
 }
 
-func (m *Manager) reEnroll(ctx context.Context) error {
-	waitCh, leader := m.startReEnroll()
-	if !leader {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-waitCh:
-			return m.reEnrollResult()
-		}
-	}
-
-	err := m.performReEnroll(ctx)
-	m.finishReEnroll(err)
-	return err
-}
-
-func (m *Manager) performReEnroll(ctx context.Context) error {
-	m.mu.Lock()
-	oldCtx := m.zitiCtx
-	m.zitiCtx = nil
-	m.identityID = ""
-	m.mu.Unlock()
-
-	if oldCtx != nil {
-		oldCtx.Close()
-	}
-
-	zitiCtx, identityID, listener, err := m.enroll(ctx)
-	if err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	m.zitiCtx = zitiCtx
-	m.identityID = identityID
-	m.mu.Unlock()
-
-	m.onNewListener(listener)
-	return nil
-}
-
 func (m *Manager) enroll(ctx context.Context) (ziti.Context, string, net.Listener, error) {
 	enrollCtx, cancel := context.WithTimeout(ctx, m.enrollTimeout)
 	defer cancel()
@@ -252,32 +216,6 @@ func (m *Manager) currentIdentityID() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.identityID
-}
-
-func (m *Manager) startReEnroll() (<-chan struct{}, bool) {
-	m.reEnrollMu.Lock()
-	defer m.reEnrollMu.Unlock()
-	if m.reEnrollActive {
-		return m.reEnrollWait, false
-	}
-	waitCh := make(chan struct{})
-	m.reEnrollWait = waitCh
-	m.reEnrollActive = true
-	return waitCh, true
-}
-
-func (m *Manager) finishReEnroll(err error) {
-	m.reEnrollMu.Lock()
-	defer m.reEnrollMu.Unlock()
-	m.reEnrollErr = err
-	m.reEnrollActive = false
-	close(m.reEnrollWait)
-}
-
-func (m *Manager) reEnrollResult() error {
-	m.reEnrollMu.Lock()
-	defer m.reEnrollMu.Unlock()
-	return m.reEnrollErr
 }
 
 func retryWithBackoff(ctx context.Context, operationName string, isRetryable func(error) bool, maxAttempts int, fn func(context.Context) error) error {

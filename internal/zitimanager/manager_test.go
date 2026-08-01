@@ -3,8 +3,8 @@ package zitimanager
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -216,39 +216,31 @@ func TestManagerInitialEnrollment(t *testing.T) {
 	}
 }
 
-func TestManagerReEnrollsOnNotFound(t *testing.T) {
-	tracker := stubContexts(t)
+func TestRunLeaseRenewalReturnsIdentityLostOnNotFound(t *testing.T) {
+	stubContexts(t)
 
 	identityJSON := []byte(`{}`)
-	var requestCalls atomic.Int32
 	var extendCalls atomic.Int32
 	server := &fakeZitiMgmtServer{
 		requestIdentity: func(_ context.Context, _ *zitimgmtv1.RequestServiceIdentityRequest) (*zitimgmtv1.RequestServiceIdentityResponse, error) {
-			call := requestCalls.Add(1)
 			return &zitimgmtv1.RequestServiceIdentityResponse{
-				ZitiIdentityId: fmt.Sprintf("identity-%d", call),
+				ZitiIdentityId: "identity-1",
 				IdentityJson:   identityJSON,
 			}, nil
 		},
 		extendIdentityLease: func(context.Context, *zitimgmtv1.ExtendIdentityLeaseRequest) (*zitimgmtv1.ExtendIdentityLeaseResponse, error) {
-			call := extendCalls.Add(1)
-			if call == 1 {
-				return nil, status.Error(codes.NotFound, "missing")
-			}
-			return &zitimgmtv1.ExtendIdentityLeaseResponse{}, nil
+			extendCalls.Add(1)
+			return nil, status.Error(codes.NotFound, "missing")
 		},
 	}
 
 	client, cleanup := startMgmtClient(t, server)
 	defer cleanup()
 
-	var listenerCalls atomic.Int32
 	listenerFactory := func(ziti.Context) (net.Listener, error) {
 		return &stubListener{}, nil
 	}
-	onNewListener := func(net.Listener) {
-		listenerCalls.Add(1)
-	}
+	onNewListener := func(net.Listener) {}
 
 	manager, err := New(
 		context.Background(),
@@ -263,127 +255,35 @@ func TestManagerReEnrollsOnNotFound(t *testing.T) {
 		t.Fatalf("create manager: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	go manager.RunLeaseRenewal(ctx)
-
-	waitForCondition(t, 200*time.Millisecond, func() bool {
-		return listenerCalls.Load() >= 2
-	}, "listener rebinding")
-
-	if requestCalls.Load() < 2 {
-		t.Fatalf("expected re-enrollment request, got %d", requestCalls.Load())
-	}
-	if manager.currentIdentityID() != "identity-2" {
-		t.Fatalf("expected identity to re-enroll, got %q", manager.currentIdentityID())
-	}
-	contexts := tracker.all()
-	if len(contexts) < 2 {
-		t.Fatalf("expected new context on re-enroll, got %d", len(contexts))
-	}
-	if !contexts[0].closed.Load() {
-		t.Fatal("expected previous ziti context to be closed")
-	}
-}
-
-func TestManagerReEnrollDebouncesConcurrentCalls(t *testing.T) {
-	tracker := stubContexts(t)
-
-	identityJSON := []byte(`{}`)
-	var requestCalls atomic.Int32
-	server := &fakeZitiMgmtServer{
-		requestIdentity: func(_ context.Context, _ *zitimgmtv1.RequestServiceIdentityRequest) (*zitimgmtv1.RequestServiceIdentityResponse, error) {
-			call := requestCalls.Add(1)
-			return &zitimgmtv1.RequestServiceIdentityResponse{
-				ZitiIdentityId: fmt.Sprintf("identity-%d", call),
-				IdentityJson:   identityJSON,
-			}, nil
-		},
-		extendIdentityLease: func(context.Context, *zitimgmtv1.ExtendIdentityLeaseRequest) (*zitimgmtv1.ExtendIdentityLeaseResponse, error) {
-			return &zitimgmtv1.ExtendIdentityLeaseResponse{}, nil
-		},
-	}
-
-	client, cleanup := startMgmtClient(t, server)
-	defer cleanup()
-
-	var listenerCalls atomic.Int32
-	listenerFactory := func(ziti.Context) (net.Listener, error) {
-		return &stubListener{}, nil
-	}
-	onNewListener := func(net.Listener) {
-		listenerCalls.Add(1)
-	}
-
-	manager, err := New(
-		context.Background(),
-		client,
-		zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY,
-		time.Minute,
-		time.Second,
-		listenerFactory,
-		onNewListener,
-	)
-	if err != nil {
-		t.Fatalf("create manager: %v", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	errCh := make(chan error, 5)
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errCh <- manager.reEnroll(ctx)
-		}()
-	}
+	errCh := make(chan error, 1)
 	go func() {
-		wg.Wait()
-		close(errCh)
+		errCh <- manager.RunLeaseRenewal(ctx)
 	}()
 
-	for err := range errCh {
-		if err != nil {
-			t.Fatalf("unexpected re-enroll error: %v", err)
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrIdentityLost) {
+			t.Fatalf("expected ErrIdentityLost, got %v", err)
 		}
-	}
-
-	if requestCalls.Load() != 2 {
-		t.Fatalf("expected single re-enroll, got %d", requestCalls.Load())
-	}
-	if listenerCalls.Load() != 2 {
-		t.Fatalf("expected listener rebinding once, got %d", listenerCalls.Load())
-	}
-	contexts := tracker.all()
-	if len(contexts) != 2 {
-		t.Fatalf("expected two contexts after re-enroll, got %d", len(contexts))
+		if !strings.Contains(err.Error(), "identity-1") {
+			t.Fatalf("expected error to name the lost identity, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected RunLeaseRenewal to return identity loss")
 	}
 }
 
-func TestManagerReEnrollAfterFailure(t *testing.T) {
-	tracker := stubContexts(t)
+func TestRunLeaseRenewalReturnsNilOnContextCancel(t *testing.T) {
+	stubContexts(t)
 
 	identityJSON := []byte(`{}`)
-	var requestCalls atomic.Int32
-	var failNext atomic.Bool
-	failNext.Store(true)
 	server := &fakeZitiMgmtServer{
 		requestIdentity: func(_ context.Context, _ *zitimgmtv1.RequestServiceIdentityRequest) (*zitimgmtv1.RequestServiceIdentityResponse, error) {
-			call := requestCalls.Add(1)
-			if call == 1 {
-				return &zitimgmtv1.RequestServiceIdentityResponse{
-					ZitiIdentityId: "identity-1",
-					IdentityJson:   identityJSON,
-				}, nil
-			}
-			if failNext.Load() {
-				return nil, status.Error(codes.Unavailable, "boom")
-			}
 			return &zitimgmtv1.RequestServiceIdentityResponse{
-				ZitiIdentityId: "identity-2",
+				ZitiIdentityId: "identity-1",
 				IdentityJson:   identityJSON,
 			}, nil
 		},
@@ -395,19 +295,16 @@ func TestManagerReEnrollAfterFailure(t *testing.T) {
 	client, cleanup := startMgmtClient(t, server)
 	defer cleanup()
 
-	var listenerCalls atomic.Int32
 	listenerFactory := func(ziti.Context) (net.Listener, error) {
 		return &stubListener{}, nil
 	}
-	onNewListener := func(net.Listener) {
-		listenerCalls.Add(1)
-	}
+	onNewListener := func(net.Listener) {}
 
 	manager, err := New(
 		context.Background(),
 		client,
 		zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY,
-		time.Minute,
+		5*time.Millisecond,
 		time.Second,
 		listenerFactory,
 		onNewListener,
@@ -416,32 +313,20 @@ func TestManagerReEnrollAfterFailure(t *testing.T) {
 		t.Fatalf("create manager: %v", err)
 	}
 
-	failedCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- manager.RunLeaseRenewal(ctx)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
 
-	if err := manager.reEnroll(failedCtx); err == nil {
-		t.Fatal("expected re-enroll to fail")
-	}
-	if listenerCalls.Load() != 1 {
-		t.Fatalf("expected no listener rebinding on failure, got %d", listenerCalls.Load())
-	}
-
-	failNext.Store(false)
-
-	successCtx, cancelSuccess := context.WithTimeout(context.Background(), time.Second)
-	defer cancelSuccess()
-
-	if err := manager.reEnroll(successCtx); err != nil {
-		t.Fatalf("expected re-enroll success, got %v", err)
-	}
-	if listenerCalls.Load() != 2 {
-		t.Fatalf("expected listener rebinding after recovery, got %d", listenerCalls.Load())
-	}
-	if manager.currentIdentityID() != "identity-2" {
-		t.Fatalf("expected identity-2 after recovery, got %q", manager.currentIdentityID())
-	}
-	contexts := tracker.all()
-	if len(contexts) < 2 {
-		t.Fatalf("expected new context after recovery, got %d", len(contexts))
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil on context cancel, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected RunLeaseRenewal to return after cancel")
 	}
 }

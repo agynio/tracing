@@ -210,7 +210,11 @@ func run() error {
 		}
 		defer zitiManager.Close()
 
-		go zitiManager.RunLeaseRenewal(ctx)
+		go func() {
+			if err := zitiManager.RunLeaseRenewal(ctx); err != nil {
+				log.Fatalf("terminating: %v", err)
+			}
+		}()
 	}
 
 	select {
