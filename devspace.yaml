@@ -155,7 +155,6 @@ dev:
     namespace: ${TRACING_NAMESPACE}
     labelSelector:
       app.kubernetes.io/name: tracing
-      app.kubernetes.io/instance: tracing
     containers:
       tracing:
         container: tracing
