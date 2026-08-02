@@ -5,26 +5,6 @@ vars:
   E2E_IMAGE: ghcr.io/agynio/devcontainer-go:1
 
 functions:
-  disable_argocd_sync: |-
-    if kubectl get application tracing -n argocd >/dev/null 2>&1; then
-      echo "Disabling ArgoCD auto-sync for tracing..."
-      kubectl patch application tracing -n argocd \
-        --type merge \
-        -p '{"spec":{"syncPolicy":{"automated":null}}}'
-      echo "ArgoCD auto-sync disabled."
-    else
-      echo "WARNING: ArgoCD Application 'tracing' not found in argocd namespace."
-    fi
-  restore_argocd_sync: &restore_argocd_sync |-
-    if kubectl get application tracing -n argocd >/dev/null 2>&1; then
-      echo "Re-enabling ArgoCD auto-sync for tracing..."
-      kubectl patch application tracing -n argocd \
-        --type merge \
-        -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-      echo "ArgoCD auto-sync restored."
-    else
-      echo "WARNING: ArgoCD Application 'tracing' not found in argocd namespace."
-    fi
   patch_deployment: |-
     echo "Patching tracing deployment for DevSpace..."
     kubectl patch deployment tracing-tracing -n ${TRACING_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
@@ -104,7 +84,6 @@ pipelines:
         short: w
         description: "Keep DevSpace running and stream logs"
     run: |-
-      disable_argocd_sync
       patch_deployment
       if [ "$(get_flag "watch")" == "true" ]; then
         start_dev --disable-pod-replace tracing
@@ -142,13 +121,6 @@ pipelines:
       exit $EXIT_CODE
 
 hooks:
-  - name: restore-argocd-auto-sync
-    events:
-      - after:dev:tracing
-    command: bash
-    args:
-      - -c
-      - *restore_argocd_sync
 
 dev:
   tracing:
